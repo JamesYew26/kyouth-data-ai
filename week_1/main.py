@@ -15,11 +15,11 @@ DB_NAME = "jobs.db"
 #     db_path = GOLD_DIR/DB_NAME
 #     run_data_profile(db_path)
 
-# def run_gold():
-#     print("🥇 Gold:...")
-#     input_dir = SILVER_DIR
-#     output_dir = GOLD_DIR
-#     load_all_jsons(input_dir, output_dir)
+def run_gold():
+    print("🥇 Gold:...")
+    input_dir = SILVER_DIR
+    output_dir = GOLD_DIR
+    load_all_jsons(input_dir, output_dir)
 
 def run_silver():
     print("🥈 Silver:...")
