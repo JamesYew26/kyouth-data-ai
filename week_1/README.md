@@ -62,53 +62,50 @@ cd week1
 The pipeline is managed via `main.py`. Ensure your MHTML files are placed in `data/0_source/` before starting.
 
 ### Step 1: Ingest (Bronze)
-Decodes MHTML files into raw HTML.
 ```bash
 uv run python main.py ingest
 ```
 
 ### Step 2: Process (Silver)
-Decodes MHTML files into raw HTML.
 ```bash
 uv run python main.py process
 ```
 
 ### Step 3: Load (Gold)
-Decodes MHTML files into raw HTML.
 ```bash
 uv run python main.py load
 ```
 
 ### Step 4: Profile
-Decodes MHTML files into raw HTML.
 ```bash
 uv run python main.py profile
 ```
 
 ### Optional: Run all
-Decodes MHTML files into raw HTML.
 ```bash
 uv run python main.py all
 ```
 
 
 # Technical Reflections
-**Module 1: The Extractor (Medallion & Lakehouses)**
-Reflection:
-Keeping original raw HTML files in the Bronze layer acts as a "source of truth." In industry, requirements shift constantly; if we decide to extract a new field (like "Years of Experience") months later, we can simply re-process the Bronze files. Without them, we would have to re-scrape a live site that may have already removed the old job postings. It provides a safety net for debugging extraction logic without losing data.
-ANS:
+### 🧠 Technical Reflections
 
-**Module 2: Treatment Plant (ETL vs ELT & Scale)**
-Reflection:
-Cloud systems prefer ELT (Load then Transform) because modern warehouses like Snowflake can scale compute instantly to handle heavy cleaning via SQL. In our local sequential Python script, processing one file at a time is a bottleneck. Distributed processing (like Spark) would allow us to parallelize these tasks, turning a linear wait time into a concurrent operation across multiple CPU cores or nodes.
-ANS:
+#### 🏗️ Module 1: The Extractor (Medallion & Lakehouses)
+> **Why is it useful to keep the original raw HTML files instead of directly inserting processed data into the database?**
+>
+> Keeping original raw HTML files in the Bronze layer acts as a "source of truth." In industry, requirements shift constantly; if we decide to extract a new field (like "Years of Experience") months later, we can simply re-process the Bronze files. Without them, we would have to re-scrape a live site that may have already removed the old job postings. It provides a safety net for debugging extraction logic without losing data.
 
-**Module 3: The Blueprint & The Vault (Storage & Contracts)**
-Reflection:
-If an essential field like job_title is missing, we fail early rather than inserting null into the DB. This prevents "silent data corruption," where business dashboards might display incorrect metrics without warning. Using INSERT OR IGNORE ensures the Gold layer is idempotent—running the pipeline multiple times won't create duplicate records, which is critical for maintaining a "clean room" warehouse.
-ANS:
+#### ⚙️ Module 2: Treatment Plant (ETL vs ELT & Scale)
+> **Why do cloud systems prefer ELT over ETL, and how does distributed processing help?**
+>
+> Cloud systems prefer ELT (Load then Transform) because modern warehouses like Snowflake can scale compute instantly to handle heavy cleaning via SQL. In our local sequential Python script, processing one file at a time is a bottleneck. Distributed processing (like Spark) would allow us to parallelize these tasks, turning a linear wait time into a concurrent operation across multiple CPU cores or nodes.
 
-**Module 4: The QA Inspector & Orchestrator (Orchestration & DAGs)**
-Reflection:
-If processor.py crashes halfway through 1,000 files, a manual script requires human intervention to resume. Real-world tools like Airflow use Directed Acyclic Graphs (DAGs) to track state and dependencies. They provide automated retries and scheduling, ensuring the pipeline is self-healing and can recover from transient errors (like network blips or locked files) without manual oversight.
-ANS:
+#### 💎 Module 3: The Blueprint & The Vault (Storage & Contracts)
+> **Why "fail early" if a field is missing, and how does `INSERT OR IGNORE` help?**
+>
+> If an essential field like `job_title` is missing, we fail early rather than inserting null into the DB. This prevents "silent data corruption," where business dashboards might display incorrect metrics without warning. Using `INSERT OR IGNORE` ensures the Gold layer is idempotent—running the pipeline multiple times won't create duplicate records, which is critical for maintaining a "clean room" warehouse.
+
+#### 🚀 Module 4: The QA Inspector & Orchestrator (Orchestration & DAGs)
+> **What is the benefit of automated orchestration (Airflow) over manual Python scripts?**
+>
+> If `processor.py` crashes halfway through 1,000 files, a manual script requires human intervention to resume. Real-world tools like Airflow use Directed Acyclic Graphs (DAGs) to track state and dependencies. They provide automated retries and scheduling, ensuring the pipeline is self-healing and can recover from transient errors (like network blips or locked files) without manual oversight.
