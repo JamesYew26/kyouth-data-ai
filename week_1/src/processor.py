@@ -31,8 +31,6 @@ def process_all_html(input_dir, output_dir):
     html_files = list(input_dir.glob("*.html"))
     stats = {"total": len(html_files), "success": 0, "failed": 0}
 
-    print(f"🛠️ Starting Silver Stage: Processing {stats['total']} files...\n")
-
     for html_file in html_files:
         try:
             content = html_file.read_text(encoding='utf-8', errors='ignore')
@@ -45,10 +43,24 @@ def process_all_html(input_dir, output_dir):
             url_path = og_url_tag["content"].rstrip('/')
             source_id = url_path.split('/')[-1]
 
+            # --- EXTRACT SOURCE_ID FROM OG:URL ---
+            og_url_tag = soup.find("meta", property="og:url")
+            if not og_url_tag or not og_url_tag.get("content"):
+                raise ValueError(f"Missing og:url meta tag")
+
+        # Extract the last segment of the URL
+            source_id = og_url_tag["content"].rstrip('/').split('/')[-1]
+
+        # Optional: Verify it's actually a number
+            if not source_id.isdigit():
+            # If the last segment isn't the ID (e.g. it's a slug), 
+            # this will catch it so you don't save bad data
+                print(f"⚠️ Warning: Extracted ID '{source_id}' is not numeric.")
+
             # --- IMPROVED SELECTORS ---
             # Jobstreet often uses data-automation attributes which are more stable than classes
             raw_data = {
-                "source_id": html_file.stem,
+                "source_id": source_id,
                 
                 "job_title": (
                     soup.find('h1') or 
