@@ -28,6 +28,7 @@ week1/
 ├── pyproject.toml         # Environment & Dependencies
 ├── uv.lock                # Deterministic lockfile
 └── README.md              # Technical Manual
+```
 
 git clone <your-repo-url>
 cd week1
