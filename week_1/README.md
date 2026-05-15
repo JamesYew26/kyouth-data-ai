@@ -69,6 +69,7 @@ uv run python main.py process
 uv run python main.py load
 uv run python main.py profile
 uv run python main.py all
+```
 
 Technical Reflections
 Module 1: The Extractor (Medallion & Lakehouses)
