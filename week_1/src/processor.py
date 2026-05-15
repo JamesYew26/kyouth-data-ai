@@ -9,14 +9,13 @@ from pydantic import BaseModel, Field, field_validator
 class JobListing(BaseModel):
     source_id: str
     job_title: str = Field(..., min_length=1)
-    # Using Optional allows the script to pass validation even if the scraper misses a field
-    company: Optional[str] = "Unknown Company"
-    description: Optional[str] = "No description available"
+    company: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=10)
 
     @field_validator('job_title', 'company', 'description', mode='before')
     @classmethod
     def clean_text(cls, v: str) -> str:
-        """Removes extra whitespace and quopri artifacts."""
+        """Removes extra whitespace."""
         if isinstance(v, str) and v.strip():
             return " ".join(v.split())
         return v
@@ -36,72 +35,72 @@ def process_all_html(input_dir, output_dir):
             content = html_file.read_text(encoding='utf-8', errors='ignore')
             soup = BeautifulSoup(content, 'html.parser')
 
+            # --- 1. EXTRACT SOURCE_ID ---
             og_url_tag = soup.find("meta", property="og:url")
             if not og_url_tag or not og_url_tag.get("content"):
-                raise ValueError("Missing og:url for source_id extraction")
-            
-            url_path = og_url_tag["content"].rstrip('/')
-            source_id = url_path.split('/')[-1]
-
-            # --- EXTRACT SOURCE_ID FROM OG:URL ---
-            og_url_tag = soup.find("meta", property="og:url")
-            if not og_url_tag or not og_url_tag.get("content"):
-                raise ValueError(f"Missing og:url meta tag")
-
-        # Extract the last segment of the URL
+                raise ValueError("Missing og:url meta tag")
             source_id = og_url_tag["content"].rstrip('/').split('/')[-1]
 
-        # Optional: Verify it's actually a number
-            if not source_id.isdigit():
-            # If the last segment isn't the ID (e.g. it's a slug), 
-            # this will catch it so you don't save bad data
-                print(f"⚠️ Warning: Extracted ID '{source_id}' is not numeric.")
+            # --- 2. EXTRACT DESCRIPTION ---
+            desc_el = (
+                soup.find("meta", property="og:description") or
+                soup.find(attrs={"data-automation": "jobDescription"}) or 
+                soup.find(class_='description')
+            )
+            
+            description = None
+            if desc_el:
+                # Use .get("content", "") to avoid None.strip() crashes
+                if desc_el.name == 'meta':
+                    description = desc_el.get("content", "").strip()
+                else:
+                    description = desc_el.get_text(separator=" ", strip=True)
 
-            # --- IMPROVED SELECTORS ---
-            # Jobstreet often uses data-automation attributes which are more stable than classes
+            # --- 3. EXTRACT TITLE & COMPANY ---
+            job_title_el = soup.find('h1') or soup.find(attrs={"data-automation": "job-detail-title"})
+            company_el = (
+                soup.find(attrs={"data-automation": "advertiser-name"}) or 
+                soup.find(class_='company')
+            )
+
+            # --- 4. THE ERROR GUARDS ---
+            if not job_title_el:
+                raise ValueError("Missing job_title")
+            if not company_el:
+                raise ValueError("Missing company")
+            if not description or len(description) < 1:
+                raise ValueError("Missing description")
+
+            # --- 5. BUILD RAW DATA ---
             raw_data = {
                 "source_id": source_id,
-                
-                "job_title": (
-                    soup.find('h1') or 
-                    soup.find(attrs={"data-automation": "job-detail-title"})
-                ).get_text(separator=" ", strip=True) if soup.find('h1') else None,
-
-                "company": (
-                    soup.find(attrs={"data-automation": "advertiser-name"}) or 
-                    soup.find(class_='company') or
-                    soup.find('span', class_='_19qz6600') # Common Jobstreet obfuscated class
-                ).get_text(separator=" ", strip=True) if soup.find(class_='company') or soup.find(attrs={"data-automation": "advertiser-name"}) else None,
-
-                "description": (
-                    soup.find(attrs={"data-automation": "jobDescription"}) or 
-                    soup.find(class_='description') or
-                    soup.find('div', class_='_1798880') # Common Jobstreet obfuscated class
-                ).get_text(separator=" ", strip=True) if soup.find(class_='description') or soup.find(attrs={"data-automation": "jobDescription"}) else None
+                "job_title": job_title_el.get_text(separator=" ", strip=True),
+                "company": company_el.get_text(separator=" ", strip=True),
+                "description": description
             }
 
-            
-
-            # --- VALIDATION ---
+            # --- 6. VALIDATION & SAVING ---
             validated_job = JobListing(**raw_data)
-
-            # --- SAVING ---
-            json_path = output_dir / f"{html_file.stem}.json"
-            json_path.write_text(validated_job.model_dump_json(indent=4))
             
+            json_path = output_dir / f"{html_file.stem}.json"
+            with open(json_path, "w", encoding="utf-8") as f:
+                f.write(validated_job.model_dump_json(indent=4))
+            
+            # MOVE THIS INSIDE THE TRY BLOCK
             stats["success"] += 1
             print(f"✅ Processed: {html_file.name}")
 
         except ValueError as e:
-            # This catches our manual "Missing" errors
             stats["failed"] += 1
             print(f"⚠️ {e} in: {html_file.name}")
+        
+        except Exception as e:
+            # Catch Pydantic ValidationErrors or other unexpected crashes
+            stats["failed"] += 1
+            print(f"❌ Unexpected Error in {html_file.name}: {e}")
 
     # --- FINAL REPORT ---
-    print("\n")
-    print(f"📊 Silver summary:")
-    print(f"Total: {stats['total']} | Processed:  {stats['success']} | Skipped:    {stats['failed']} \n\n")
+    print(f"\n📊 Silver summary: Total: {stats['total']} | Processed: {stats['success']} | Skipped: {stats['failed']}\n")
 
 if __name__ == "__main__":
-    # Ensure paths match your main.py constants
     process_all_html("data/1_bronze", "data/2_silver")
