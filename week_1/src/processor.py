@@ -43,8 +43,8 @@ def process_all_html(input_dir, output_dir):
 
             # --- 2. EXTRACT DESCRIPTION ---
             desc_el = (
-                soup.find("meta", property="og:description") or
-                soup.find(attrs={"data-automation": "jobDescription"}) or 
+                # soup.find("meta", property="og:description") or
+                soup.find("div", attrs={"data-automation": "jobAdDetails"}) or 
                 soup.find(class_='description')
             )
             
