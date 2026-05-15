@@ -2,8 +2,8 @@ import argparse
 from pathlib import Path # Figure out why use Path?
 from src.ingestor import ingest_all_mhtml
 from src.processor import process_all_html
-# from src.loader import load_all_jsons
-# from src.run_data_profile import run_data_profile
+from src.loader import load_all_jsons
+from src.profiler import run_data_profile
 
 SOURCE_DIR = Path("data/0_source")
 BRONZE_DIR = Path("data/1_bronze")
@@ -11,9 +11,9 @@ SILVER_DIR = Path("data/2_silver")
 GOLD_DIR = Path("data/3_gold")
 DB_NAME = "jobs.db"
 
-# def run_profiler():
-#     db_path = GOLD_DIR/DB_NAME
-#     run_data_profile(db_path)
+def run_profiler():
+    db_path = GOLD_DIR/DB_NAME
+    run_data_profile(db_path)
 
 def run_gold():
     print("🥇 Gold:...")
@@ -33,6 +33,13 @@ def run_bronze():
     input_dir = SOURCE_DIR
     output_dir = BRONZE_DIR
     ingest_all_mhtml(input_dir, output_dir)
+
+def run_all():
+    print("🚀 Starting Full Pipeline Orchestration...")
+    run_bronze()
+    run_silver()
+    run_gold()
+    run_profiler()
     
 def main():
 	# ORCHESTRATION TO BE IMPLEMENTED HERE
@@ -54,6 +61,8 @@ def main():
     # Command: profile
     subparsers.add_parser("profile", help="Run the data profiling stage")
 
+    subparsers.add_parser("all", help="Run all processes")
+
     # 3. Parse the arguments from the terminal
     args = parser.parse_args()
 
@@ -62,10 +71,12 @@ def main():
         run_bronze()
     elif args.command == "process":
         run_silver()
-    # elif args.command == "load":
-    #     run_gold()
-    # elif args.command == "profile":
-    #     run_profiler()
+    elif args.command == "load":
+        run_gold()
+    elif args.command == "profile":
+        run_profiler()
+    elif args.command == "all":
+        run_all()
     else:
         # If the user just types 'python3 main.py' without a command
         parser.print_help()
