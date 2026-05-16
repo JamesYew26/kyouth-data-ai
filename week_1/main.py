@@ -11,15 +11,18 @@ SILVER_DIR = Path("data/2_silver")
 GOLD_DIR = Path("data/3_gold")
 DB_NAME = "jobs.db"
 
+
 def run_profiler():
     db_path = GOLD_DIR/DB_NAME
     run_data_profile(db_path)
+
 
 def run_gold():
     print("🥇 Gold:...")
     input_dir = SILVER_DIR
     output_dir = GOLD_DIR
     load_all_jsons(input_dir, output_dir)
+
 
 def run_silver():
     print("🥈 Silver:...")
@@ -34,13 +37,15 @@ def run_bronze():
     output_dir = BRONZE_DIR
     ingest_all_mhtml(input_dir, output_dir)
 
+
 def run_all():
     print("🚀 Starting Full Pipeline Orchestration...")
     run_bronze()
     run_silver()
     run_gold()
     run_profiler()
-    
+
+
 def main():
 	# ORCHESTRATION TO BE IMPLEMENTED HERE
     # 1. Setup the Argument Parser
