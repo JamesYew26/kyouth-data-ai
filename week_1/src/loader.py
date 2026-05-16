@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 
+
 def load_all_jsons(input_dir, output_dir):
     """
     Reads all JSON files from input_dir and loads them into a SQLite DB 
