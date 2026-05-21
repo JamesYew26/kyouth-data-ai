@@ -1,12 +1,13 @@
 # tag_data.py
 import sqlite3
 import time
-from prompt_model import prompt_model  # 🔌 Connecting our two files
+from prompt_model import ask_gemini  # 🔌 Connecting our two files
 
 def tag_data(db_url: str):
     """
     Reads job descriptions from a SQLite database, uses Gemini via prompt_model.py
     to extract the technical stack, and updates the database safely in batches.
+    Paced specifically to respect Gemini API Free Tier rate limits (15 RPM).
     """
     # 1. Connect to the database safely
     try:
@@ -26,10 +27,11 @@ def tag_data(db_url: str):
         conn.close()
         return
 
-    # Configuration for batching and retries
-    batch_size = 8
-    retry_duration = 65
-    model_name = 'gemini-2.5-flash'  # ✅ Correct official fast model identifier
+    # Configuration for batching and rate limiting
+    batch_size = 5
+    retry_duration = 70  # Safe cooldown window (just over 60 seconds) to clear rate limits if they hit
+    pacing_duration = 10 # Mandatary pause between successful batches to stay under limits
+    model_name = 'gemini-2.5-flash'  # Official fast model identifier
 
     print(f"📋 Found {len(rows)} rows to process. Starting batch updates...")
     
@@ -54,7 +56,7 @@ def tag_data(db_url: str):
                 
                 # Call the external Gemini module function
                 print(f"🧠 Sending batch {batch_num} to Gemini...")
-                llm_response = prompt_model(model_name, prompt)
+                llm_response = ask_gemini(model_name, prompt)
                 print(f"📥 Response received for batch {batch_num}.")
                 
                 # Parse the model's response line by line
@@ -77,13 +79,15 @@ def tag_data(db_url: str):
                     conn.commit()
                 
                 success = True  # Batch completed successfully!
-                print("💤 Pacing delay... waiting 12 seconds before the next batch.")
-                time.sleep(12)  # 12 seconds * 5 rows per batch = perfectly spaced requests
+                
+                # 🏎️ THE FIX: Add a pacing delay so we don't spam the API free tier
+                print(f"💤 Pacing... pausing for {pacing_duration} seconds before starting the next batch.\n")
+                time.sleep(pacing_duration)
                 
             except Exception as e:
-                # If ask_gemini fails, this block catches it and knows exactly which batch failed
+                # If ask_gemini fails or drops, this block catches it and protects the loop
                 print(f"⚠️ Error in batch {batch_num}: {e}")
-                print(f"⏳ Retrying batch {batch_num} in {retry_duration} seconds...")
+                print(f"⏳ Waiting {retry_duration} seconds to let the rate limit reset before retrying...")
                 time.sleep(retry_duration)
 
     conn.close()
@@ -91,4 +95,4 @@ def tag_data(db_url: str):
 
 if __name__ == "__main__":
     # Ensure this string points to your actual local SQLite database file
-    tag_data("data/jobs.db")
+    tag_data("jobs_d1.db")
