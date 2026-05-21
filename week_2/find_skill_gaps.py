@@ -1,0 +1,3 @@
+def find_skill_gaps(input_file_path: str, db_url: str) -> SkillGapResult:
+	# Your code here...
+	pass
