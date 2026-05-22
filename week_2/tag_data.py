@@ -1,13 +1,13 @@
 # tag_data.py
 import sqlite3
 import time
-from prompt_model import ask_gemini  # 🔌 Connecting our two files
+from prompt_model import prompt_model  # 🔌 Connecting our two files
 
 def tag_data(db_url: str):
     """
-    Reads job descriptions from a SQLite database, uses Gemini via prompt_model.py
-    to extract the technical stack, and updates the database safely in batches.
-    Paced specifically to respect Gemini API Free Tier rate limits (15 RPM).
+    Reads job descriptions from a SQLite database, uses Gemini or a local model via 
+    prompt_model.py to extract the technical stack, and updates the database 
+    safely in batches.
     """
     # 1. Connect to the database safely
     try:
@@ -29,34 +29,41 @@ def tag_data(db_url: str):
 
     # Configuration for batching and rate limiting
     batch_size = 5
-    retry_duration = 70  # Safe cooldown window (just over 60 seconds) to clear rate limits if they hit
-    pacing_duration = 10 # Mandatary pause between successful batches to stay under limits
-    model_name = 'gemini-2.5-flash'  # Official fast model identifier
+    retry_duration = 70  # Safe cooldown window to clear rate limits if they hit
+    pacing_duration = 10 # Mandatory pause between successful batches for cloud models
+    model_name = 'gemma3'  # Current model choice
 
     print(f"📋 Found {len(rows)} rows to process. Starting batch updates...")
     
     # 3. Loop through the data in batches
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
-        batch_num = (i // batch_size) + 1
-        print(f"📦 Processing batch {batch_num} ({len(batch)} rows)...")
+        batch_num = i // batch_size  # Starts at 0 to match your [Batch 0] format
         
         success = False
+        attempt = 1  # 🔢 Track the current attempt for this batch
+        
         while not success:
             try:
                 # Construct the prompt for this specific batch
                 prompt = (
-                    "Extract the technical stack (programming languages, frameworks, databases, tools) "
-                    "used in each job description below. Respond using the format:\n"
-                    "source_id: tech1, tech2, tech3\n\n"
+                    f"Analyze the following job description and extract all specific technologies, "
+                    f"programming languages, frameworks, databases, and tools mentioned (e.g., Git, AWS, CI/CD).\n\n"
+                )
+
+                extraction_instruction = (
+                    "You are a precise data extraction tool. Output ONLY a flat, comma-separated list "
+                    "of the extracted technologies. Do not include introductory text, bullet points, "
+                    "markdown formatting, source IDs, or explanations. "
+                    "Example output: Git, GitHub Actions, AWS, GCP, Azure"
                 )
                 
                 for source_id, description in batch:
                     prompt += f"Source ID {source_id}:\n{description}\n\n"
                 
-                # Call the external Gemini module function
-                print(f"🧠 Sending batch {batch_num} to Gemini...")
-                llm_response = ask_gemini(model_name, prompt)
+                # Call the external module function
+                print(f"🧠 Sending batch {batch_num} to {model_name}...")
+                llm_response = prompt_model(model_name, prompt, extraction_instruction)
                 print(f"📥 Response received for batch {batch_num}.")
                 
                 # Parse the model's response line by line
@@ -67,32 +74,41 @@ def tag_data(db_url: str):
                     if ":" in line:
                         parts = line.split(':', 1)
                         if len(parts) == 2:
-                            source_id = int(parts[0].strip())
+                            # Keep source_id as a string or integer matching your database schema
+                            source_id = parts[0].strip()
                             tech_stack = parts[1].strip()
                             parsed_updates.append((tech_stack, source_id))
                 
-                # 4. Save changes using a single batch update command
+                # 4. Save changes as long as at least one row was successfully parsed
                 if parsed_updates:
-                    print(f"💾 Saving {len(parsed_updates)} updates to the database...")
                     update_query = "UPDATE jobs SET tech_stack = ? WHERE source_id = ?;"
                     cursor.executemany(update_query, parsed_updates)
                     conn.commit()
+                    
+                    # 🎉 Print each successfully analyzed job in your exact format
+                    for tech_stack, source_id in parsed_updates:
+                        print(f"Analyzed Job {source_id}: {tech_stack}\n")
+                        print(f"="*20)
+                else:
+                    # If absolutely zero lines could be parsed, it's a complete format failure
+                    raise ValueError("No valid formatted lines could be parsed from the response.")
                 
-                success = True  # Batch completed successfully!
+                success = True  # Move to the next batch since we saved what we could!
                 
-                # 🏎️ THE FIX: Add a pacing delay so we don't spam the API free tier
-                print(f"💤 Pacing... pausing for {pacing_duration} seconds before starting the next batch.\n")
-                time.sleep(pacing_duration)
+                # Pacing delay specifically for cloud models
+                if 'gemini' in model_name.lower():
+                    print(f"💤 Pacing... pausing for {pacing_duration} seconds before starting the next batch.\n")
+                    time.sleep(pacing_duration)
                 
             except Exception as e:
-                # If ask_gemini fails or drops, this block catches it and protects the loop
-                print(f"⚠️ Error in batch {batch_num}: {e}")
-                print(f"⏳ Waiting {retry_duration} seconds to let the rate limit reset before retrying...")
+                # ⚠️ Print the exact failure format you requested
+                print(f"[Batch {batch_num}] Attempt {attempt} failed: {e}")
+                attempt += 1  
+                print(f"⏳ Waiting {retry_duration} seconds before retrying...")
                 time.sleep(retry_duration)
 
     conn.close()
     print("✅ Cloud data tagging complete!")
 
 if __name__ == "__main__":
-    # Ensure this string points to your actual local SQLite database file
-    tag_data("jobs_d1.db")
+    tag_data("data/jobs_d1.db")
