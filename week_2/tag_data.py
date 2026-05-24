@@ -11,9 +11,11 @@ def tag_data(db_url: str):
     MODEL_NAME = "gemini-2.5-flash-lite"
 
     try:
-        conn = sqlite3.connect(db_url, timeout=30.0)  # High timeout to prevent quick locks
+        conn = sqlite3.connect(
+            db_url, timeout=30.0
+        )  # High timeout to prevent quick locks
         cursor = conn.cursor()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"CRITICAL: Failed to connect to database at {db_url}: {e}")
         return
 
@@ -67,9 +69,7 @@ Input Data:
                     # Clean up response if LLM accidentally used markdown code blocks
                     if response_raw.startswith("```"):
                         response_raw = (
-                            response_raw.strip("`")
-                            .replace("json\n", "", 1)
-                            .strip()
+                            response_raw.strip("`").replace("json\n", "", 1).strip()
                         )
 
                     # Parse response safely
@@ -103,7 +103,8 @@ Input Data:
 
                 except (json.JSONDecodeError, TypeError, KeyError) as parse_err:
                     print(
-                        f"[Batch {batch_idx}] Attempt {attempt} failed: Malformed LLM payload or parsing mismatch."
+                        f"[Batch {batch_idx}] Attempt {attempt} failed: "
+                        f"Malformed LLM payload or parsing mismatch. Details: {parse_err}"
                     )
                     if attempt < MAX_RETRIES:
                         time.sleep(wait_time)
@@ -117,7 +118,7 @@ Input Data:
                         time.sleep(wait_time)
                         wait_time *= 2.0
 
-                except Exception as general_err:
+                except Exception as general_err:  # noqa: BLE001
                     print(
                         f"[Batch {batch_idx}] Attempt {attempt} failed: Unexpected runtime or LLM disconnect exception. {general_err}"
                     )
@@ -130,15 +131,16 @@ Input Data:
                     f"[Batch {batch_idx}] Completely failed after {MAX_RETRIES} attempts. Skipping to next batch."
                 )
 
-    except Exception as fatal_pipeline_err:
+    except Exception as fatal_pipeline_err:  # noqa: BLE001
         print(
             f"An unhandled structural anomaly occurred inside the pipeline wrapper: {fatal_pipeline_err}"
         )
     finally:
         try:
             conn.close()
-        except:
+        except sqlite3.Error:
             pass
-            
+
+
 if __name__ == "__main__":
     tag_data("data/jobs_d1.db")
