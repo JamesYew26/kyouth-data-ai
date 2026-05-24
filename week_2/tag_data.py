@@ -1,114 +1,144 @@
-# tag_data.py
+import json
 import sqlite3
 import time
-from prompt_model import prompt_model  # 🔌 Connecting our two files
+from prompt_model import prompt_model
+
 
 def tag_data(db_url: str):
-    """
-    Reads job descriptions from a SQLite database, uses Gemini or a local model via 
-    prompt_model.py to extract the technical stack, and updates the database 
-    safely in batches.
-    """
-    # 1. Connect to the database safely
+    # Pipeline Constants
+    BATCH_SIZE = 5
+    MAX_RETRIES = 3
+    MODEL_NAME = "gemini-2.5-flash-lite"
+
     try:
-        conn = sqlite3.connect(db_url)
+        conn = sqlite3.connect(db_url, timeout=30.0)  # High timeout to prevent quick locks
         cursor = conn.cursor()
     except Exception as e:
-        print(f"❌ Database connection failed: {e}")
+        print(f"CRITICAL: Failed to connect to database at {db_url}: {e}")
         return
 
-    # 2. Fetch rows that are missing a tech_stack value
     try:
-        query = "SELECT source_id, description FROM jobs WHERE tech_stack IS NULL OR tech_stack = '';"
-        cursor.execute(query)
-        rows = cursor.fetchall()
-    except Exception as e:
-        print(f"❌ Failed to fetch data: {e}")
-        conn.close()
-        return
+        # 1. Fetch all pending source_ids and descriptions to process
+        cursor.execute(
+            """
+            SELECT source_id, description 
+            FROM jobs 
+            WHERE tech_stack IS NULL OR tech_stack = ''
+        """
+        )
+        all_jobs = cursor.fetchall()
 
-    # Configuration for batching and rate limiting
-    batch_size = 5
-    retry_duration = 70  # Safe cooldown window to clear rate limits if they hit
-    pacing_duration = 10 # Mandatory pause between successful batches for cloud models
-    model_name = 'gemma3'  # Current model choice
+        if not all_jobs:
+            print("No pending jobs to process.")
+            return
 
-    print(f"📋 Found {len(rows)} rows to process. Starting batch updates...")
-    
-    # 3. Loop through the data in batches
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i : i + batch_size]
-        batch_num = i // batch_size  # Starts at 0 to match your [Batch 0] format
-        
-        success = False
-        attempt = 1  # 🔢 Track the current attempt for this batch
-        
-        while not success:
-            try:
-                # Construct the prompt for this specific batch
-                prompt = (
-                    f"Analyze the following job description and extract all specific technologies, "
-                    f"programming languages, frameworks, databases, and tools mentioned (e.g., Git, AWS, CI/CD).\n\n"
+        # 2. Segment jobs into explicit batches
+        batches = [
+            all_jobs[i : i + BATCH_SIZE] for i in range(0, len(all_jobs), BATCH_SIZE)
+        ]
+
+        for batch_idx, batch in enumerate(batches, start=1):
+            # Construct a clean payload representing the batch
+            batch_data = [
+                {"source_id": str(row[0]), "description": row[1]} for row in batch
+            ]
+
+            success = False
+            attempt = 0
+            wait_time = 2.0  # Initial retry backoff delay in seconds
+
+            while attempt < MAX_RETRIES and not success:
+                attempt += 1
+                try:
+                    # Construct strict prompt ensuring structured output mapping back to unique IDs
+                    prompt = f"""
+You are a technical data extractor. Analyze the following list of job applications provided in a JSON format.
+For each job, extract the technical stack (programming languages, frameworks, databases, APIs, enterprise systems, and tools mentioned) as a single comma-separated string.
+
+Return your response ONLY as a valid JSON object where the keys are the exact string 'source_id's provided, and the values are the comma-separated tech stack strings. Do not wrap the JSON in markdown blocks (like ```json).
+
+Input Data:
+{json.dumps(batch_data)}
+                    """.strip()
+
+                    # Call LLM interface
+                    response_raw = prompt_model(MODEL_NAME, prompt)
+
+                    # Clean up response if LLM accidentally used markdown code blocks
+                    if response_raw.startswith("```"):
+                        response_raw = (
+                            response_raw.strip("`")
+                            .replace("json\n", "", 1)
+                            .strip()
+                        )
+
+                    # Parse response safely
+                    parsed_response = json.loads(response_raw)
+
+                    # Prepare batch update collection
+                    updates = []
+                    for row in batch:
+                        s_id = str(row[0])
+                        if s_id in parsed_response:
+                            tech_string = str(parsed_response[s_id]).strip()
+                            updates.append((tech_string, row[0]))
+
+                    # 3. Resilient Database Write for the Batch
+                    if updates:
+                        cursor.executemany(
+                            """
+                            UPDATE jobs 
+                            SET tech_stack = ? 
+                            WHERE source_id = ?
+                        """,
+                            updates,
+                        )
+                        conn.commit()
+
+                        # Print explicit individual row success logs
+                        for tech_string, orig_id in updates:
+                            print(f"Analyzed Job [{orig_id}]: {tech_string}")
+
+                    success = True  # Batch completed safely
+
+                except (json.JSONDecodeError, TypeError, KeyError) as parse_err:
+                    print(
+                        f"[Batch {batch_idx}] Attempt {attempt} failed: Malformed LLM payload or parsing mismatch."
+                    )
+                    if attempt < MAX_RETRIES:
+                        time.sleep(wait_time)
+                        wait_time *= 2.0
+
+                except sqlite3.OperationalError as db_err:
+                    print(
+                        f"[Batch {batch_idx}] Attempt {attempt} failed: Database lock or operational exception. {db_err}"
+                    )
+                    if attempt < MAX_RETRIES:
+                        time.sleep(wait_time)
+                        wait_time *= 2.0
+
+                except Exception as general_err:
+                    print(
+                        f"[Batch {batch_idx}] Attempt {attempt} failed: Unexpected runtime or LLM disconnect exception. {general_err}"
+                    )
+                    if attempt < MAX_RETRIES:
+                        time.sleep(wait_time)
+                        wait_time *= 2.0
+
+            if not success:
+                print(
+                    f"[Batch {batch_idx}] Completely failed after {MAX_RETRIES} attempts. Skipping to next batch."
                 )
 
-                extraction_instruction = (
-                    "You are a precise data extraction tool. Output ONLY a flat, comma-separated list "
-                    "of the extracted technologies. Do not include introductory text, bullet points, "
-                    "markdown formatting, source IDs, or explanations. "
-                    "Example output: Git, GitHub Actions, AWS, GCP, Azure"
-                )
-                
-                for source_id, description in batch:
-                    prompt += f"Source ID {source_id}:\n{description}\n\n"
-                
-                # Call the external module function
-                print(f"🧠 Sending batch {batch_num} to {model_name}...")
-                llm_response = prompt_model(model_name, prompt, extraction_instruction)
-                print(f"📥 Response received for batch {batch_num}.")
-                
-                # Parse the model's response line by line
-                parsed_updates = []
-                lines = llm_response.split('\n')
-                
-                for line in lines:
-                    if ":" in line:
-                        parts = line.split(':', 1)
-                        if len(parts) == 2:
-                            # Keep source_id as a string or integer matching your database schema
-                            source_id = parts[0].strip()
-                            tech_stack = parts[1].strip()
-                            parsed_updates.append((tech_stack, source_id))
-                
-                # 4. Save changes as long as at least one row was successfully parsed
-                if parsed_updates:
-                    update_query = "UPDATE jobs SET tech_stack = ? WHERE source_id = ?;"
-                    cursor.executemany(update_query, parsed_updates)
-                    conn.commit()
-                    
-                    # 🎉 Print each successfully analyzed job in your exact format
-                    for tech_stack, source_id in parsed_updates:
-                        print(f"Analyzed Job {source_id}: {tech_stack}\n")
-                        print(f"="*20)
-                else:
-                    # If absolutely zero lines could be parsed, it's a complete format failure
-                    raise ValueError("No valid formatted lines could be parsed from the response.")
-                
-                success = True  # Move to the next batch since we saved what we could!
-                
-                # Pacing delay specifically for cloud models
-                if 'gemini' in model_name.lower():
-                    print(f"💤 Pacing... pausing for {pacing_duration} seconds before starting the next batch.\n")
-                    time.sleep(pacing_duration)
-                
-            except Exception as e:
-                # ⚠️ Print the exact failure format you requested
-                print(f"[Batch {batch_num}] Attempt {attempt} failed: {e}")
-                attempt += 1  
-                print(f"⏳ Waiting {retry_duration} seconds before retrying...")
-                time.sleep(retry_duration)
-
-    conn.close()
-    print("✅ Cloud data tagging complete!")
-
+    except Exception as fatal_pipeline_err:
+        print(
+            f"An unhandled structural anomaly occurred inside the pipeline wrapper: {fatal_pipeline_err}"
+        )
+    finally:
+        try:
+            conn.close()
+        except:
+            pass
+            
 if __name__ == "__main__":
     tag_data("data/jobs_d1.db")
