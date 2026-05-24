@@ -47,6 +47,9 @@ def query_gemini(model_name: str, prompt: str) -> str:
 
 def query_ollama(model_name: str, prompt: str) -> str:
     """Queries a local model via the Ollama client library."""
+
+    if model_name=="deepseek":
+        model_name="deepseek-r1:1.5b"
     try:
         response = ollama.generate(model=model_name, prompt=prompt)
         return response['response']
