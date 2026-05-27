@@ -1,0 +1,16 @@
+[project]
+name = "kyouth2026"
+version = "0.1.0"
+description = "Week 2 AI Component"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "google-genai",
+     "ollama",
+     "python-dotenv"
+]
+
+[dependency-groups]
+dev = [
+    "ruff==0.15",
+]
