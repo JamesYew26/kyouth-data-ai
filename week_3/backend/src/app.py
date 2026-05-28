@@ -43,11 +43,11 @@ async def chat_endpoint(payload: ChatRequest):
     try:
         # Extract fields securely from the validated payload
         user_message = payload.message
-        context_text = payload.pdf_text
+        # context_text = payload.pdf_text
 
         # Execute the LLM invocation function logic from week_2 module
         # This function utilizes the OLLAMA_HOST environment variable internally
-        llm_output = prompt_model(user_message, context_text)
+        llm_output = prompt_model("gemini", user_message) # <------- Select model here
         
         # Structure and return the standard JSON response back to the client
         return {"response": llm_output}
