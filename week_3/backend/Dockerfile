@@ -1,24 +1,24 @@
-# Use the specified python 3.14 image on Debian Bookworm
+# Use the specified python image on Debian Bookworm
 FROM python:3.14.4-bookworm
 
-# Set the working directory inside the container
-WORKDIR /backend
+# Set the relocation workspace container path to /app
+WORKDIR /app
 
-# Install uv package manager globally
+# Install the uv package manager globally
 RUN pip install --no-cache-dir uv
 
-# Copy dependency files first to leverage Docker caching layers
+# Copy the dependency management definitions first to leverage Docker layer caching
 COPY pyproject.toml ./
 
-# Install project dependencies using uv (creates a virtual environment implicitly or syncs)
+# Install project dependencies using uv global system flag
 RUN uv pip install --system -r pyproject.toml
 
-# Copy the rest of the application code into the container
+# Copy all remaining source files, ensuring nested folders like src/week_2/ map to /app
 COPY . .
 
-# Expose the port FastAPI will run on
+# Expose the internal port the framework listens on
 EXPOSE 8000
 
-# Set entrypoint and default arguments as requested
+# Structured execution layer matching targeted layout adjustments
 ENTRYPOINT ["uv", "run", "uvicorn"]
 CMD ["--app-dir", "src", "--host", "0.0.0.0", "--port", "8000", "app:app"]
