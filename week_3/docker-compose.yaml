@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  # --- Frontend Service Configuration ---
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: frontend
+    pull_policy: build
+    ports:
+      - "80:8000"  # Maps host port 80 to container port 8000
+    environment:
+      - BACKEND_URL=http://localhost:8001/chat  # Injected for client-side browser execution
+    restart: always
+
+  # --- Backend Service Configuration ---
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: backend
+    pull_policy: build
+    ports:
+      - "8001:8000"  # Maps host port 8001 to container port 8000
+    env_file:
+      - ./backend/.env
+    restart: always
