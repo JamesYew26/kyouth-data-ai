@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # --- Frontend Service Configuration ---
   frontend:
@@ -9,9 +7,9 @@ services:
     image: frontend
     pull_policy: build
     ports:
-      - "80:8000"  # Maps host port 80 to container port 8000
+      - "80:8000"  
     environment:
-      - BACKEND_URL=http://localhost:8001/chat  # Injected for client-side browser execution
+      - BACKEND_URL=http://localhost:8001/chat  
     restart: always
 
   # --- Backend Service Configuration ---
@@ -22,7 +20,11 @@ services:
     image: backend
     pull_policy: build
     ports:
-      - "8001:8000"  # Maps host port 8001 to container port 8000
+      - "8001:8000"  
     env_file:
-      - ./backend/.env
+      - ./.env
+    # 🔍 --- ADD THIS VOLUMES BLOCK RIGHT HERE ---
+    volumes:
+      - ./backend/src:/app/src   # Syncs your python source code folder
+      - ./backend/src/week_2/data:/app/data # 🧠 CRITICAL: Syncs your SQLite data directory file layout!
     restart: always
