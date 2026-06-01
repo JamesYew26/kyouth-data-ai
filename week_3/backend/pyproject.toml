@@ -13,6 +13,7 @@ dependencies = [
     "ollama",
     "pypdf",
     "python-multipart",
+    "ruff>=0.15.0",
 ]
 
 [tool.uv]

@@ -6,12 +6,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from pypdf import PdfReader  # ✅ Back for backend extraction tracking
 
-# Explicitly load environment variables from the root backend/.env file
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
-
 # Import your core modules
 from week_2.prompt_model import prompt_model
 from week_2.find_skill_gaps import find_skill_gaps
+
+# Explicitly load environment variables from the root backend/.env file
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+
 
 app = FastAPI(title="LLM Chat Backend", version="1.0.0")
 
