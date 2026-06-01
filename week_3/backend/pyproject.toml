@@ -11,6 +11,8 @@ dependencies = [
     "pydantic>=2.6.0",
     "google-genai",
     "ollama",
+    "pypdf",
+    "python-multipart",
 ]
 
 [tool.uv]
