@@ -1,0 +1,12 @@
+.env
+.venv
+.dockerignore
+.DS_Store
+__pycache__
+.ruff_cache
+
+/backend/src/week_2/__pycache__
+/backend/src/week_2/.ruff_cache
+
+/frontend/src/__pycache__
+/frontend/src/.ruff_cache
