@@ -222,7 +222,3 @@ Given more time and expanded development tracks, the application would scale up 
 1. **Robust UI Engineering Frameworks:** Porting the raw HTML/CSS framework layout into a responsive React or Vue component framework layer to achieve smooth modular tracking.
 2. **Persistent Data Architecture:** Injecting a persistent database engine (such as PostgreSQL) to securely maintain historical user accounts, profile metrics, and chat history rows.
 3. **Cloud Native Orchestration:** Moving the infrastructure boundaries beyond local machine configurations by targeting AWS ECS or Kubernetes clusters paired with fully managed cloud API gateways.
-
-```
-
-```
