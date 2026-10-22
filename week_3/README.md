@@ -1,4 +1,4 @@
-```markdown
+
 # Full-Stack Containerized AI Chat & Resume Analysis Application
 
 ## Project Overview
