@@ -1,30 +1,31 @@
 services:
-  # --- Frontend Service Configuration ---
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    image: frontend
-    pull_policy: build
+    build: ./frontend
     ports:
-      - "80:8000"  
+      - "80:8000"
     environment:
-      - BACKEND_URL=http://localhost:8001/chat  
-    restart: always
+      # Read by the browser, so it points at the host-published backend port.
+      BACKEND_URL: http://localhost:8001/chat
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
 
-  # --- Backend Service Configuration ---
   backend:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
-    image: backend
-    pull_policy: build
+      context: ..                         # repo root, so the image can include week_2/
+      dockerfile: week_3/backend/Dockerfile
     ports:
-      - "8001:8000"  
-    env_file:
-      - ./.env
-    # 🔍 --- ADD THIS VOLUMES BLOCK RIGHT HERE ---
+      - "8001:8000"
+    env_file: .env                        # GEMINI_API_KEY, LLM_MODEL, OLLAMA_HOST
+    environment:
+      DATABASE_PATH: /app/data/jobs_d1.db
+      ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
     volumes:
-      - ./backend/src:/app/src   # Syncs your python source code folder
-      - ./backend/src/week_2/data:/app/data # 🧠 CRITICAL: Syncs your SQLite data directory file layout!
-    restart: always
+      - ../week_2/data:/app/data:ro       # the tagged jobs warehouse, read-only
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped

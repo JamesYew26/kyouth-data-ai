@@ -1,16 +1,23 @@
 [project]
-name = "kyouth2026"
-version = "0.1.0"
-description = "Week 2 AI Component"
+name = "skill-gap-ai"
+version = "0.2.0"
+description = "LLM tech-stack tagging and resume skill-gap analysis over the JobStreet warehouse"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "google-genai",
-     "ollama",
-     "python-dotenv"
+    "ollama",
+    "pydantic>=2.6",
+    "pypdf",
+    "python-dotenv",
 ]
 
 [dependency-groups]
 dev = [
-    "ruff==0.15",
+    "pytest>=8",
+    "ruff>=0.15",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

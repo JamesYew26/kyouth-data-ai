@@ -1,23 +1,22 @@
+"""Frontend service: serves the single-page chat UI."""
+
 import os
+from pathlib import Path
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
-app = FastAPI(title="Frontend Service")
+# The browser calls the backend directly, so this must be a URL reachable from the
+# user's machine (e.g. http://localhost:8001/chat), not a Docker-internal hostname.
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001/chat")
 
-# Resolve the absolute path to the templates directory
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
+app = FastAPI(title="Frontend Service")
+templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    """
-    Serves the main chat page interface.
-    """
-    # Fix: Pass request as an explicit keyword argument
+async def chat_page(request: Request):
     return templates.TemplateResponse(
-        request=request,
-        name="chat_page.html",
-        context={},  # Any other template variables go here
+        request=request, name="chat_page.html", context={"backend_url": BACKEND_URL}
     )

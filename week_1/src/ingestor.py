@@ -1,51 +1,46 @@
-import sys
+"""Bronze layer: decode raw MHTML snapshots (0_source) into plain HTML (1_bronze)."""
+
 import email
+import logging
 from pathlib import Path
 
-# Move these inside the function or keep as constants, but don't run logic here
-def decode_single_file(mhtml_file, output_path):
-    """Helper to decode a single MHTML file to HTML."""
-    try:
-        with open(mhtml_file, 'rb') as f:
-            msg = email.message_from_binary_file(f)
-            for part in msg.walk():
-                if part.get_content_type() == 'text/html':
-                    html_data = part.get_payload(decode=True)
-                    output_path.write_bytes(html_data)
-                    return True
-        return False
-    except Exception:
-        return False
+logger = logging.getLogger(__name__)
 
-def ingest_all_mhtml(input_dir, output_dir):
-    """The function called by main.py."""
-    input_dir = Path(input_dir)
-    output_dir = Path(output_dir)
+
+def extract_html_from_mhtml(mhtml_bytes: bytes) -> bytes | None:
+    """Return the first text/html part of an MHTML document, or None if there isn't one.
+
+    MHTML is a MIME multipart archive (the same format as an email), so the stdlib
+    `email` parser can walk its parts and decode quoted-printable/base64 for us.
+    """
+    msg = email.message_from_bytes(mhtml_bytes)
+    for part in msg.walk():
+        if part.get_content_type() == "text/html":
+            return part.get_payload(decode=True)
+    return None
+
+
+def ingest_all_mhtml(input_dir: Path, output_dir: Path) -> dict[str, int]:
+    """Decode every *.mhtml in input_dir into output_dir/<stem>.html."""
+    input_dir, output_dir = Path(input_dir), Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    all_files = list(input_dir.glob("*.mhtml"))
-    total_files = len(all_files)
-    success_count = 0
-    failed_count = 0
+    stats = {"total": 0, "extracted": 0, "failed": 0}
+    for mhtml_file in sorted(input_dir.glob("*.mhtml")):
+        stats["total"] += 1
+        try:
+            html = extract_html_from_mhtml(mhtml_file.read_bytes())
+            if html is None:
+                raise ValueError("no text/html part found")
+            (output_dir / f"{mhtml_file.stem}.html").write_bytes(html)
+            stats["extracted"] += 1
+            logger.debug("Extracted %s", mhtml_file.name)
+        except Exception as exc:  # noqa: BLE001 - one bad file must not stop the batch
+            stats["failed"] += 1
+            logger.warning("Failed %s: %s", mhtml_file.name, exc)
 
-    
-
-    for file in all_files:
-        new_filename = file.stem + ".html"
-        target_path = output_dir / new_filename
-        
-        if decode_single_file(file, target_path):
-            success_count += 1
-            print(f"✅ Extracted: {new_filename}")
-        else:
-            failed_count += 1
-            print(f"⚠️ Failed: {file.name}")
-
-    print(f"\n📊 Bronze Summary: Total: {total_files} | Extracted: {success_count} | Failed: {failed_count}\n")
-
-# --- THIS PREVENTS AUTO-RUNNING ---
-if __name__ == "__main__":
-    # This only runs if you run 'python3 ingestor.py' directly
-    source = Path("data/0_source")
-    bronze = Path("data/1_bronze")
-    ingest_all_mhtml(source, bronze)
+    logger.info(
+        "Bronze summary: total=%(total)d extracted=%(extracted)d failed=%(failed)d",
+        stats,
+    )
+    return stats

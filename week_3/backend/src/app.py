@@ -1,107 +1,93 @@
+"""FastAPI backend: LLM chat + resume skill-gap analysis.
+
+The business logic lives in ../../week_2 (prompt_model.py, find_skill_gaps.py). The
+Dockerfile copies those modules next to this file, so there is one source of truth.
+"""
+
+import logging
 import os
-import shutil
-from typing import Optional
-from fastapi import FastAPI, HTTPException, status, Form, File, UploadFile
+import tempfile
+from pathlib import Path
+from typing import Annotated
+
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
-from pypdf import PdfReader  # ✅ Back for backend extraction tracking
+from find_skill_gaps import find_skill_gaps, format_report, read_resume
+from prompt_model import LLMError, prompt_model
 
-# Import your core modules
-from week_2.prompt_model import prompt_model
-from week_2.find_skill_gaps import find_skill_gaps
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+)
+logger = logging.getLogger("backend")
 
-# Explicitly load environment variables from the root backend/.env file
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
+DATABASE_PATH = Path(os.getenv("DATABASE_PATH", "data/jobs_d1.db"))
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost").split(",")
+ALLOWED_SUFFIXES = {".pdf", ".txt"}
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
-
-app = FastAPI(title="LLM Chat Backend", version="1.0.0")
-
+app = FastAPI(title="Skill Gap Chat Backend", version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["POST", "GET"],
     allow_headers=["*"],
 )
 
-DATABASE_URL = "data/jobs_d1.db"
+
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok", "database_found": DATABASE_PATH.exists()}
 
 
-@app.post("/chat", status_code=status.HTTP_200_OK)
-async def chat_endpoint(
-    message: str = Form(""), file: Optional[UploadFile] = File(None)
-):
-    temp_file_path = None  # ✅ Standardized variable name
-    user_query = message.strip()
-
-    try:
-        # --- SCENARIO 1: ONLY PDF IS UPLOADED (No text message) ---
-        if file and not user_query:
-            print(
-                f"--- [FLOW 1] Routing raw file path directly to find_skill_gaps pipeline ---"
-            )
-
-            # Save raw file container to temp disk path so pipeline can open it
-            temp_file_path = f"/tmp/{file.filename}"
-            with open(temp_file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
-
-            # Execute pipeline and receive the exact SkillGapResult instance object class
-            gap_analysis_result = find_skill_gaps(
-                input_file_path=temp_file_path, db_url=DATABASE_URL
-            )
-
-            # Extract the raw sorted string array from the class schema variable
-            raw_gaps_list = gap_analysis_result.gaps
-
-            # Return it in the response matching your desired layout format string
-            return {"reply": f"gaps={raw_gaps_list}"}
-
-        # --- SCENARIO 2: USER SENDS BOTH MESSAGE AND PDF ---
-        elif file and user_query:
-            print(
-                f"--- [FLOW 2] Injected Conversational Prompt Model with File Context ---"
-            )
-
-            pdf_reader = PdfReader(file.file)
-            extracted_text = ""
-            for page in pdf_reader.pages:
-                extracted_text += page.extract_text() + "\n"
-
-            combined_prompt = (
-                f"Context from uploaded Resume:\n"
-                f"--- START EXTRACT ---\n{extracted_text}\n--- END EXTRACT ---\n\n"
-                f"User Instruction: {user_query}"
-            )
-
-            llm_output = prompt_model("gemini", combined_prompt)
-            return {"reply": llm_output}
-
-        # --- SCENARIO 3: USER ONLY SENDS A MESSAGE (No file) ---
-        elif user_query and not file:
-            print(
-                f"--- [FLOW 3] Standard Conversational Chat routed directly to prompt_model ---"
-            )
-
-            llm_output = prompt_model("gemini", user_query)
-            return {"reply": llm_output}
-
-        else:
-            return {
-                "reply": "Please send a message query or upload a file profile to start."
-            }
-
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+async def save_upload(file: UploadFile) -> Path:
+    """Write the upload to a private temp file. Never trust the client's filename."""
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"An error occurred while routing the payload: {str(e)}",
+            415, f"Only {', '.join(sorted(ALLOWED_SUFFIXES))} files are supported"
         )
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, "File too large (max 5 MB)")
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+    return Path(tmp.name)
+
+
+@app.post("/chat")
+async def chat(
+    message: Annotated[str, Form()] = "",
+    file: Annotated[UploadFile | None, File()] = None,
+) -> dict:
+    """Route by input:
+    - file only        -> deterministic skill-gap report against the jobs database
+    - file + message   -> LLM answers the message using the resume as context
+    - message only     -> plain LLM chat
+    """
+    query = message.strip()
+    if not query and not file:
+        return {
+            "reply": "Send a message, or upload a resume (.pdf/.txt) for a skill-gap report."
+        }
+
+    tmp_path = await save_upload(file) if file else None
+    try:
+        if tmp_path and not query:
+            logger.info("Flow: skill-gap analysis")
+            return {"reply": format_report(find_skill_gaps(tmp_path, DATABASE_PATH))}
+
+        prompt = query
+        if tmp_path:
+            logger.info("Flow: chat with resume context")
+            prompt = (
+                f"Resume:\n---\n{read_resume(tmp_path)}\n---\n\nUser question: {query}"
+            )
+        else:
+            logger.info("Flow: chat")
+        return {"reply": prompt_model(None, prompt)}
+    except LLMError as exc:
+        logger.warning("LLM failure: %s", exc)
+        raise HTTPException(502, f"The language model is unavailable: {exc}") from exc
     finally:
-        # Clean up temporary disk file footprints safely
-        if temp_file_path and os.path.exists(
-            temp_file_path
-        ):  # ✅ Standardized variable name
-            os.remove(temp_file_path)
+        if tmp_path:
+            tmp_path.unlink(missing_ok=True)

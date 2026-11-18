@@ -1,111 +1,51 @@
-# JobStreet Data Pipeline
+# Week 1 — JobStreet Medallion Pipeline
 
-A robust ETL (Extract, Transform, Load) pipeline designed to scrape job listings from MHTML snapshots and transform them into structured analytical data. This project implements a **Medallion Architecture** to ensure data lineage, integrity, and scalability.
+Batch ETL that turns saved JobStreet job pages (MHTML snapshots) into a clean SQLite
+table, using a **medallion architecture** so every stage is re-runnable from the one
+before it.
 
----
+| Layer | Folder | Produced by | Contents |
+|---|---|---|---|
+| Source | `data/0_source/` | you (browser "Save as MHTML") | 100 raw `.mhtml` snapshots |
+| Bronze | `data/1_bronze/` | `src/ingestor.py` | decoded HTML, untouched |
+| Silver | `data/2_silver/` | `src/processor.py` | one validated JSON record per job |
+| Gold | `data/3_gold/jobs.db` | `src/loader.py` | `jobs` table (primary key `source_id`) |
+| QA | — | `src/profiler.py` | row counts, nulls, length stats, top companies |
 
-## Project Description
-The goal of this project is to automate the extraction of job market data from semi-structured web snapshots. By transitioning data through multiple stages—from raw MHTML to a structured SQLite database—this pipeline provides a reliable way to analyze job trends, salaries, and company requirements without the fragility of live web scraping.
+Latest run: **100 → 100 bronze → 84 silver (16 rejected: 8 no title, 5 no description,
+3 no company) → 84 gold rows**, and re-running inserts 0 duplicates.
 
----
+## Run
 
-## Project Structure
-The following folder structure is strictly adhered to for data lineage and modularity:
-
-```text
-week1/
-├── data/
-│   ├── 0_source/          # Vendor Data: Unedited MHTML snapshots
-│   ├── 1_bronze/          # Raw Data: Decoded HTML files
-│   ├── 2_silver/          # Clean Data: Validated JSON records
-│   └── 3_gold/            # Final Warehouse: SQLite Database (jobs.db)
-├── src/
-│   ├── ingestor.py        # Day 1: Extracts 0_source -> 1_bronze
-│   ├── processor.py       # Day 2: Cleans/Validates 1_bronze -> 2_silver
-│   ├── loader.py          # Day 3: Loads 2_silver -> 3_gold
-│   └── profiler.py        # Day 4: Quality checks on Gold layer
-├── main.py                # CLI Orchestrator (The Conductor)
-├── pyproject.toml         # Environment & Dependencies
-├── uv.lock                # Deterministic lockfile
-└── README.md              # Technical Manual
-```
-
-git clone <your-repo-url>
-cd week1
-
-# Create the version file
-    echo "3.14" > .python-version
-    # Install the specific Python version and initialize environment
-    uv python install
-    uv venv
-    ```
-  **Activate Virtual Environment:**
-    *   **macOS/Linux:** `source .venv/bin/activate`
-    *   **Windows:** `.venv\Scripts\activate`
-  **Install Dependencies:**
-    ```bash
-    uv add bs4 ruff pydantic
-    ```
-
-### `uv` Package Manager Cheat Sheet
-| Action | Command |
-| :--- | :--- |
-| **Add a package** | `uv add <package_name>` |
-| **Remove a package** | `uv remove <package_name>` |
-| **Run the orchestrator** | `uv run main.py <command>` |
-| **Lint/Format code** | `uv run ruff check .` |
-| **Sync environment** | `uv sync` |
-
----
-
-## Usage
-The pipeline is managed via `main.py`. Ensure your MHTML files are placed in `data/0_source/` before starting.
-
-### Step 1: Ingest (Bronze)
 ```bash
-uv run python main.py ingest
+uv sync
+uv run main.py all          # or: ingest | process | load | profile
+uv run main.py all -v       # per-file debug logging
+uv run pytest               # offline unit + end-to-end tests
 ```
 
-### Step 2: Process (Silver)
-```bash
-uv run python main.py process
-```
+## Design decisions
 
-### Step 3: Load (Gold)
-```bash
-uv run python main.py load
-```
+- **Keep bronze raw.** If we later want a new field (e.g. salary), we re-parse bronze
+  instead of re-scraping pages that may no longer exist.
+- **Data contract at the silver boundary.** `JobListing` (Pydantic) rejects records with
+  a missing title/company or a description under 10 chars. Bad pages are logged and
+  skipped ("fail early, per record") so one broken page never stops the batch and never
+  pollutes gold with NULLs.
+- **Idempotent load.** `source_id` (from the job URL) is the primary key and the loader
+  uses `INSERT OR IGNORE`, so the pipeline can be re-run safely after a crash.
+- **Pure parsing function.** `parse_job_html(html) -> JobListing` has no I/O, which is
+  what makes it easy to unit-test.
+- **Paths resolved from `main.py`**, not the working directory, so the CLI behaves the
+  same wherever it is launched.
 
-### Step 4: Profile
-```bash
-uv run python main.py profile
-```
+## What I'd change at scale
 
-### Optional: Run all
-```bash
-uv run python main.py all
-```
-
-
-# Technical Reflections
-### 🧠 Technical Reflections
-
-#### 🏗️ Module 1: The Extractor (Medallion & Lakehouses)
-> **Why is it useful to keep the original raw HTML files instead of directly inserting processed data into the database?**
->
-> Keeping original raw HTML files in the Bronze layer acts as a "source of truth." In industry, requirements shift constantly; if we decide to extract a new field (like "Years of Experience") months later, we can simply re-process the Bronze files. Without them, we would have to re-scrape a live site that may have already removed the old job postings. It provides a safety net for debugging extraction logic without losing data.
-
-#### ⚙️ Module 2: Treatment Plant (ETL vs ELT & Scale)
-> **Why do cloud systems prefer ELT over ETL, and how does distributed processing help?**
->
-> Cloud systems prefer ELT (Load then Transform) because modern warehouses like Snowflake can scale compute instantly to handle heavy cleaning via SQL. In our local sequential Python script, processing one file at a time is a bottleneck. Distributed processing (like Spark) would allow us to parallelize these tasks, turning a linear wait time into a concurrent operation across multiple CPU cores or nodes.
-
-#### 💎 Module 3: The Blueprint & The Vault (Storage & Contracts)
-> **Why "fail early" if a field is missing, and how does `INSERT OR IGNORE` help?**
->
-> If an essential field like `job_title` is missing, we fail early rather than inserting null into the DB. This prevents "silent data corruption," where business dashboards might display incorrect metrics without warning. Using `INSERT OR IGNORE` ensures the Gold layer is idempotent—running the pipeline multiple times won't create duplicate records, which is critical for maintaining a "clean room" warehouse.
-
-#### 🚀 Module 4: The QA Inspector & Orchestrator (Orchestration & DAGs)
-> **What is the benefit of automated orchestration (Airflow) over manual Python scripts?**
->
-> If `processor.py` crashes halfway through 1,000 files, a manual script requires human intervention to resume. Real-world tools like Airflow use Directed Acyclic Graphs (DAGs) to track state and dependencies. They provide automated retries and scheduling, ensuring the pipeline is self-healing and can recover from transient errors (like network blips or locked files) without manual oversight.
+- Store silver as Parquet and gold in a warehouse (Postgres/BigQuery/Snowflake), and let
+  SQL do more of the transformation (ELT, e.g. with dbt).
+- Orchestrate with Airflow/Dagster: one task per stage, retries, scheduling, backfills.
+- Process files in parallel (multiprocessing, or Spark for very large volumes).
+- Use an upsert (`ON CONFLICT DO UPDATE`) plus a `scraped_at` column to track job
+  postings that change over time (SCD type 2).
+- Quarantine rejected records in a `rejects/` folder with the reason, and alert when the
+  rejection rate crosses a threshold.

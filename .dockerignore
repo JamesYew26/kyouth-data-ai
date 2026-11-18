@@ -1,0 +1,8 @@
+# The backend image is built from the repo root. Allow-list only what it needs so
+# secrets (.env), virtualenvs and the week_1 raw data never enter the build context.
+*
+!week_2/prompt_model.py
+!week_2/find_skill_gaps.py
+!week_3/backend/pyproject.toml
+!week_3/backend/uv.lock
+!week_3/backend/src/app.py

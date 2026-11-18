@@ -1,0 +1,21 @@
+# OS / editor
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# Secrets
+.env
+
+# Data (raw snapshots and databases stay local)
+data/
+*.db
+
+# Scratch folders and separate repos
+temp/
+kyouth-final-week/
+INTERVIEW_PREP.md

@@ -1,171 +1,181 @@
-import json
+"""Compare a candidate's resume against the tagged jobs table and report missing skills.
+
+Hybrid design:
+  1. LLM (non-deterministic): extract the candidate's skills from free-text resume.
+  2. SQL + Python (deterministic): count how many jobs require each skill, subtract
+     what the candidate already has, and rank the gaps by market demand.
+
+    uv run find_skill_gaps.py [--resume data/resume_d3.txt] [--db data/jobs_d1.db]
+"""
+
+import argparse
 import logging
 import sqlite3
-import time
-from typing import List, Set
+from collections import Counter
+from pathlib import Path
+
+from prompt_model import LLMError, parse_json_response, prompt_model, with_retry
 from pydantic import BaseModel
 
-# Mocking or assuming the existence of the requested module
-# from prompt_model import prompt_model
+logger = logging.getLogger(__name__)
 
-# Configure logging to standard output as required
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+DATA_DIR = Path(__file__).parent / "data"
+
+# Soft skills / methodologies are not "technical gaps" for this report.
+NON_TECHNICAL = {
+    "leadership",
+    "management",
+    "project management",
+    "communication",
+    "agile",
+    "scrum",
+    "teamwork",
+    "problem solving",
+    "interpersonal skills",
+    "pmp",
+    "scrum master",
+}
+
+# Map common spelling variants onto one canonical name so set arithmetic lines up.
+SYNONYMS = {
+    "dotnet": ".net",
+    ".net core": ".net",
+    "dot net": ".net",
+    "postgres": "postgresql",
+    "js": "javascript",
+    "node": "node.js",
+    "nodejs": "node.js",
+    "k8s": "kubernetes",
+    "gcp": "google cloud",
+    "powerbi": "power bi",
+}
+
+RESUME_PROMPT = """Extract every technical skill, programming language, framework, tool,
+cloud service and database mentioned in this resume. Return ONLY a JSON array of strings.
+
+Resume:
+{resume}"""
+
+
+class SkillGap(BaseModel):
+    skill: str
+    jobs_requiring: int
 
 
 class SkillGapResult(BaseModel):
-    gaps: List[str]
+    candidate_skills: list[str] = []
+    gaps: list[SkillGap] = []
+    jobs_analysed: int = 0
+    error: str | None = None
 
 
-def clean_skill(skill: str) -> str:
+def normalise_skill(skill: str) -> str:
+    s = " ".join(skill.lower().split()).strip(" .,;")
+    return SYNONYMS.get(s, s)
+
+
+def read_resume(path: Path) -> str:
+    """Read a .pdf or plain-text resume."""
+    path = Path(path)
+    if path.suffix.lower() == ".pdf":
+        from pypdf import PdfReader
+
+        return "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def extract_candidate_skills(resume_text: str, model: str | None = None) -> set[str]:
+    def call() -> list:
+        skills = parse_json_response(
+            prompt_model(model, RESUME_PROMPT.format(resume=resume_text))
+        )
+        if not isinstance(skills, list):
+            raise LLMError("expected a JSON array of skills")
+        return skills
+
+    skills = with_retry(call, retry_on=(LLMError,), log=logger.warning)
+    return {normalise_skill(str(s)) for s in skills if str(s).strip()}
+
+
+def skill_demand(db_path: Path) -> tuple[Counter, int]:
+    """Return (Counter{skill: number of jobs listing it}, number of tagged jobs)."""
+    demand: Counter = Counter()
+    jobs = 0
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.execute(
+            "SELECT tech_stack FROM jobs WHERE tech_stack IS NOT NULL AND TRIM(tech_stack) != ''"
+        )
+        for (
+            tech_stack,
+        ) in cursor:  # the cursor streams rows; no need to load all at once
+            jobs += 1
+            demand.update(
+                {normalise_skill(s) for s in tech_stack.split(",") if s.strip()}
+            )
+    conn.close()
+    return demand, jobs
+
+
+def compute_gaps(
+    candidate: set[str], demand: Counter, top_n: int | None = None
+) -> list[SkillGap]:
+    """Skills the market asks for that the candidate lacks, most in-demand first.
+
+    Pure function: same input -> same output (ties broken alphabetically).
     """
-    Normalizes a skill string to ensure exact matching and reduce variations.
-    Converts to lowercase, strips whitespace, and standardizes common edge cases.
-    """
-    s = skill.lower().strip()
-    # Normalize common dotnet variations deterministically
-    if s in ("dotnet", ".net core", "dot net"):
-        return ".net"
-    return s
+    missing = [
+        (skill, n)
+        for skill, n in demand.items()
+        if skill not in candidate and skill not in NON_TECHNICAL
+    ]
+    missing.sort(key=lambda item: (-item[1], item[0]))
+    return [SkillGap(skill=s, jobs_requiring=n) for s, n in missing[:top_n]]
 
 
-def call_llm_with_retry(file_path: str, max_retries: int = 3, base_delay: float = 2.0) -> List[str]:
-    """
-    Reads the resume file and invokes the LLM to extract skills with exponential backoff.
-    """
-    # Import inside the function or assume top-level import per constraints
-    from prompt_model import prompt_model
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        resume_text = f.read()
-
-    prompt = (
-        "Extract all technical skills, programming languages, frameworks, tools, and databases "
-        "mentioned in the following resume. Return ONLY a valid JSON array of lowercase strings. "
-        "Preserve compound terms exactly as written (e.g., 'c/c++', '.net', 'react native'). "
-        "Do not include any markdown formatting, wrappers, conversational text, or explanations.\n\n"
-        f"Resume Text:\n{resume_text}"
-    )
-
-    delay = base_delay
-    for attempt in range(max_retries + 1):
-        try:
-            # Using 'gemini-1.5-flash' as a highly reliable fast processing model
-            raw_response = prompt_model("gemini-3-flash-preview", prompt)
-
-            
-            # Clean up potential markdown code block wrappers if the LLM slips up
-            cleaned_response = raw_response.strip()
-            if cleaned_response.startswith("```json"):
-                cleaned_response = cleaned_response[7:]
-            if cleaned_response.endswith("```"):
-                cleaned_response = cleaned_response[:-3]
-            cleaned_response = cleaned_response.strip()
-
-
-            skills = json.loads(cleaned_response)
-            if isinstance(skills, list):
-                return [clean_skill(str(skill)) for skill in skills]
-            
-            raise ValueError("LLM did not return a JSON array structure.")
-            
-        except Exception as e:
-            if attempt == max_retries:
-                logging.error(f"LLM invocation failed after {max_retries} retries: {e}")
-                raise e
-            logging.warning(f"LLM attempt {attempt + 1} failed: {e}. Retrying in {delay} seconds...")
-            time.sleep(delay)
-            delay *= 2  # Exponential backoff
-
-    return []
-
-
-def fetch_db_skills_batched(db_url: str, batch_size: int = 500, max_retries: int = 3, base_delay: float = 2.0) -> Set[str]:
-    """
-    Queries the SQLite jobs table in chunks to prevent memory bloat, using exponential backoff.
-    """
-    db_skills = set()
-    delay = base_delay
-    
-    for attempt in range(max_retries + 1):
-        conn = None
-        try:
-            conn = sqlite3.connect(db_url)
-            cursor = conn.cursor()
-            
-            
-            cursor.execute("SELECT tech_stack FROM jobs WHERE tech_stack IS NOT NULL")
-            
-            while True:
-                rows = cursor.fetchmany(batch_size)
-                print("db success")
-                if not rows:
-                    break
-                
-                for (tech_stack_str,) in rows:
-                    # Split comma-separated database tokens
-                    for raw_skill in tech_stack_str.split(","):
-                        cleaned = clean_skill(raw_skill)
-                        if cleaned:
-                            db_skills.add(cleaned)
-            
-            return db_skills
-
-        except sqlite3.Error as e:
-            if attempt == max_retries:
-                logging.error(f"Database read failed after {max_retries} retries: {e}")
-                raise e
-            logging.warning(f"Database attempt {attempt + 1} failed: {e}. Retrying in {delay} seconds...")
-            time.sleep(delay)
-            delay *= 2
-        finally:
-            if conn:
-                conn.close()
-                
-    return db_skills
-
-
-def find_skill_gaps(input_file_path: str, db_url: str) -> SkillGapResult:
-    """
-    Identifies missing technical skills deterministically by comparing a candidate's 
-    resume text against a jobs database tech_stack.
-    """
-    # Deterministic exclusion set to strip out soft skills or non-technical terms
-    NON_TECHNICAL_EXCLUSIONS = {
-        "leadership", "management", "project management", "communication", 
-        "agile", "scrum", "teamwork", "problem solving", "interpersonal skills",
-        "pmp", "scrum master"
-    }
-
+def find_skill_gaps(
+    resume_path: Path, db_path: Path, model: str | None = None, top_n: int | None = 15
+) -> SkillGapResult:
+    """End-to-end gap analysis. Never raises: errors are returned in `result.error`."""
     try:
-        # Step 1: Semantic Extraction (LLM Phase)
-        candidate_skills_list = call_llm_with_retry(input_file_path)
-        candidate_skills_set = set(candidate_skills_list)
+        demand, jobs = skill_demand(db_path)
+        if not jobs:
+            return SkillGapResult(
+                error="No tagged jobs in the database; run tag_data.py first"
+            )
+        candidate = (
+            extract_candidate_skills(read_resume(resume_path), model) - NON_TECHNICAL
+        )
+        return SkillGapResult(
+            candidate_skills=sorted(candidate),
+            gaps=compute_gaps(candidate, demand, top_n),
+            jobs_analysed=jobs,
+        )
+    except Exception as exc:  # API boundary: report instead of crashing the caller
+        logger.exception("Skill gap analysis failed")
+        return SkillGapResult(error=str(exc))
 
 
-        # Step 2: Read Target Skills (Deterministic Database Batch Phase)
-        database_skills_set = fetch_db_skills_batched(db_url)
+def format_report(result: SkillGapResult) -> str:
+    if result.error:
+        return f"Skill gap analysis failed: {result.error}"
+    if not result.gaps:
+        return f"No gaps found against {result.jobs_analysed} jobs. Nice!"
+    lines = [f"Top skill gaps across {result.jobs_analysed} job listings:"]
+    lines += [
+        f"  {i:>2}. {g.skill} — required by {g.jobs_requiring} job(s)"
+        for i, g in enumerate(result.gaps, start=1)
+    ]
+    return "\n".join(lines)
 
 
-        # Step 3: Filter, Compute Gaps, and Normalize (Pure Python Processing)
-        # Apply the hardcoded exclusion filters to both sets
-        filtered_candidate_skills = candidate_skills_set - NON_TECHNICAL_EXCLUSIONS
-        filtered_database_skills = database_skills_set - NON_TECHNICAL_EXCLUSIONS
-
-
-        # Calculate semantic gap via set difference
-        gap_set = filtered_database_skills - filtered_candidate_skills
-
-        # Enforce 100% determinism via alphabetical sorting
-        sorted_gaps = sorted(list(gap_set))
-        print(f"gaps={sorted_gaps}")
-        return SkillGapResult(gaps=sorted_gaps)
-    
-    
-
-    except Exception as final_error:
-        # Step 4: Robust Error Handling (Never throw an unhandled exception or crash)
-        logging.error(f"Critical error encountered in find_skill_gaps pipeline: {final_error}")
-        return SkillGapResult(gaps=[])
-    
 if __name__ == "__main__":
-    find_skill_gaps("data/resume_d3.txt", "data/jobs_d1.db")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    parser = argparse.ArgumentParser(
+        description="Resume vs. job-market skill gap report"
+    )
+    parser.add_argument("--resume", type=Path, default=DATA_DIR / "resume_d3.txt")
+    parser.add_argument("--db", type=Path, default=DATA_DIR / "jobs_d1.db")
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--top", type=int, default=15)
+    args = parser.parse_args()
+    print(format_report(find_skill_gaps(args.resume, args.db, args.model, args.top)))

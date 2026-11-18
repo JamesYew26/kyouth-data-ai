@@ -1,11 +1,20 @@
 [project]
-name = "kyouth2026"
-version = "0.1.0"
-description = "Add your description here"
+name = "jobstreet-pipeline"
+version = "0.2.0"
+description = "Medallion (bronze/silver/gold) ETL pipeline for JobStreet job listings"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "bs4>=0.0.2",
     "pydantic>=2.13.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
     "ruff>=0.15.12",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

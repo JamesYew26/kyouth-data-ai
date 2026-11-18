@@ -1,90 +1,52 @@
+"""CLI orchestrator for the JobStreet medallion pipeline.
+
+uv run main.py ingest | process | load | profile | all
+"""
+
 import argparse
-from pathlib import Path # Figure out why use Path?
+import logging
+from pathlib import Path
+
 from src.ingestor import ingest_all_mhtml
-from src.processor import process_all_html
 from src.loader import load_all_jsons
+from src.processor import process_all_html
 from src.profiler import run_data_profile
 
-SOURCE_DIR = Path("data/0_source")
-BRONZE_DIR = Path("data/1_bronze")
-SILVER_DIR = Path("data/2_silver")
-GOLD_DIR = Path("data/3_gold")
-DB_NAME = "jobs.db"
+# Resolve paths from this file, not the current working directory,
+# so the pipeline behaves the same no matter where it is launched from.
+DATA_DIR = Path(__file__).resolve().parent / "data"
+SOURCE_DIR = DATA_DIR / "0_source"
+BRONZE_DIR = DATA_DIR / "1_bronze"
+SILVER_DIR = DATA_DIR / "2_silver"
+GOLD_DB = DATA_DIR / "3_gold" / "jobs.db"
+
+STAGES = {
+    "ingest": lambda: ingest_all_mhtml(SOURCE_DIR, BRONZE_DIR),
+    "process": lambda: process_all_html(BRONZE_DIR, SILVER_DIR),
+    "load": lambda: load_all_jsons(SILVER_DIR, GOLD_DB),
+    "profile": lambda: run_data_profile(GOLD_DB),
+}
 
 
-def run_profiler():
-    db_path = GOLD_DIR/DB_NAME
-    run_data_profile(db_path)
-
-
-def run_gold():
-    print("🥇 Gold:...")
-    input_dir = SILVER_DIR
-    output_dir = GOLD_DIR
-    load_all_jsons(input_dir, output_dir)
-
-
-def run_silver():
-    print("🥈 Silver:...")
-    input_dir = BRONZE_DIR
-    output_dir = SILVER_DIR
-    process_all_html(input_dir, output_dir)
-
-
-def run_bronze():
-    print("🥉 Bronze:...")
-    input_dir = SOURCE_DIR
-    output_dir = BRONZE_DIR
-    ingest_all_mhtml(input_dir, output_dir)
-
-
-def run_all():
-    print("🚀 Starting Full Pipeline Orchestration...")
-    run_bronze()
-    run_silver()
-    run_gold()
-    run_profiler()
-
-
-def main():
-	# ORCHESTRATION TO BE IMPLEMENTED HERE
-    # 1. Setup the Argument Parser
-    parser = argparse.ArgumentParser(description="Job Data Pipeline CLI")
-    
-    # 2. Add subparsers to handle different commands
-    subparsers = parser.add_subparsers(dest="command", help="Available pipeline stages")
-
-    # Command: ingest
-    subparsers.add_parser("ingest", help="Run the ingestion (Bronze) stage")
-    
-    # Command: process
-    subparsers.add_parser("process", help="Run the processing (Silver) stage")
-
-    # Command: load
-    subparsers.add_parser("load", help="Run the loading (Gold) stage")
-
-    # Command: profile
-    subparsers.add_parser("profile", help="Run the data profiling stage")
-
-    subparsers.add_parser("all", help="Run all processes")
-
-    # 3. Parse the arguments from the terminal
+def main() -> None:
+    parser = argparse.ArgumentParser(description="JobStreet medallion pipeline")
+    parser.add_argument(
+        "command",
+        choices=[*STAGES, "all"],
+        help="stage to run; 'all' runs ingest -> process -> load -> profile",
+    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="per-file logging")
     args = parser.parse_args()
 
-    # 4. Routing Logic
-    if args.command == "ingest":
-        run_bronze()
-    elif args.command == "process":
-        run_silver()
-    elif args.command == "load":
-        run_gold()
-    elif args.command == "profile":
-        run_profiler()
-    elif args.command == "all":
-        run_all()
-    else:
-        # If the user just types 'python3 main.py' without a command
-        parser.print_help()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    )
+
+    for name in STAGES if args.command == "all" else [args.command]:
+        logging.getLogger("pipeline").info("Running stage: %s", name)
+        STAGES[name]()
+
 
 if __name__ == "__main__":
     main()
